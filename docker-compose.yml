@@ -1,0 +1,7 @@
+services:
+  meteo-meshtastic:
+    build: .
+    container_name: meteo-meshtastic
+    env_file:
+      - .env
+    restart: unless-stopped

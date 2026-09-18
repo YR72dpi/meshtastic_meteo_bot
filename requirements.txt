@@ -1,0 +1,4 @@
+meshtastic
+requests
+python-dotenv
+tzdata
