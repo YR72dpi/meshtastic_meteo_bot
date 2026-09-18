@@ -20,15 +20,25 @@ Utilisation :
     python meteo_rouen_meshtastic.py --host 192.168.1.50
     python meteo_rouen_meshtastic.py --channel-index 2
     python meteo_rouen_meshtastic.py --ville "Paris" --lat 48.8566 --lon 2.3522
+    python meteo_rouen_meshtastic.py --style card
 
 Le script cherche automatiquement l'index du canal nommé "meteo" configuré
 sur le node. Si aucun canal de ce nom n'est trouvé, on peut forcer l'index
 avec --channel-index (ou --channel-name pour un autre nom).
+
+Avant l'envoi, un ping ICMP est tenté vers le node pour le "réveiller"
+(certains nodes coupent leur WiFi en veille). Ce ping n'est jamais bloquant :
+si le node filtre l'ICMP, le script continue quand même.
 """
 
 import argparse
+import contextlib
 import os
+import platform
+import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 
 import requests
@@ -56,6 +66,10 @@ DEFAULT_LON = 1.0943
 DEFAULT_VILLE = "Rouen"
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+# Délai (s) laissé après sendText() avant de fermer la connexion, pour laisser
+# le temps au message d'être réellement transmis (voir _install_quiet_thread_excepthook).
+SEND_SETTLE_SECONDS = float(os.environ.get("SEND_SETTLE_SECONDS", 2))
 
 # Table de correspondance (simplifiée) des codes météo WMO utilisés par Open-Meteo
 WMO_CODES = {
@@ -93,6 +107,8 @@ WMO_CODES = {
 THUNDERSTORM_CODES = {95, 96, 99}
 # Codes impliquant de la pluie/averses/bruine/neige (donc précipitations probables)
 RAIN_CODES = {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 71, 73, 75, 77, 80, 81, 82, 85, 86}
+# Sous-ensemble neige (utilisé uniquement pour choisir l'emoji le plus parlant)
+SNOW_CODES = {71, 73, 75, 77, 85, 86}
 
 
 def fetch_weather(lat: float, lon: float) -> dict:
@@ -150,20 +166,108 @@ def libelle_pluie_orage(weathercode: int, proba_precip: float) -> str:
     return f"Pas de pluie prévue ({proba_precip:.0f}%)"
 
 
-def build_message(ville: str, w: dict) -> str:
+def weather_icon(weathercode: int) -> str:
+    """Retourne un emoji représentatif du code météo WMO (pour un rendu plus UI/UX)."""
+    if weathercode in THUNDERSTORM_CODES:
+        return "⛈️"
+    if weathercode in SNOW_CODES:
+        return "❄️"
+    if weathercode in RAIN_CODES:
+        return "🌧️"
+    if weathercode in (45, 48):
+        return "🌫️"
+    if weathercode == 3:
+        return "☁️"
+    if weathercode == 2:
+        return "⛅"
+    return "☀️"  # 0 (ciel dégagé), 1 (plutôt dégagé) ou code inconnu
+
+
+def build_message_compact(ville: str, w: dict) -> str:
+    """Proposition 1 : une seule ligne, dense mais scannable en un coup d'œil."""
     date_str = datetime.strptime(w["date"], "%Y-%m-%d").strftime("%d/%m")
+    icon = weather_icon(w["weathercode"])
     condition = WMO_CODES.get(w["weathercode"], "Conditions variables")
     pluie = libelle_pluie_orage(w["weathercode"], w["proba_precip"])
     soleil = niveau_ensoleillement(w["nuages"], w["ensoleillement_s"])
 
-    msg = (
-        f"Meteo {ville} {date_str}: {condition}. "
-        f"T {w['temp_min']:.0f}-{w['temp_max']:.0f}C | "
-        f"Hygro {w['humidite']:.0f}% | "
-        f"{pluie} | "
-        f"Soleil: {soleil}"
+    return (
+        f"{icon} {ville} {date_str} : {condition} | "
+        f"🌡️ {w['temp_min']:.0f}-{w['temp_max']:.0f}°C  💧 {w['humidite']:.0f}% | "
+        f"🌧️ {pluie} | ☀️ {soleil}"
     )
-    return msg
+
+
+def build_message_card(ville: str, w: dict) -> str:
+    """Proposition 2 : mini "carte" multi-lignes, plus aérée façon dashboard."""
+    date_str = datetime.strptime(w["date"], "%Y-%m-%d").strftime("%d/%m")
+    icon = weather_icon(w["weathercode"])
+    condition = WMO_CODES.get(w["weathercode"], "Conditions variables")
+    pluie = libelle_pluie_orage(w["weathercode"], w["proba_precip"])
+    soleil = niveau_ensoleillement(w["nuages"], w["ensoleillement_s"])
+
+    return (
+        f"{icon} Météo {ville} — {date_str} ({condition})\n"
+        f"🌡️ {w['temp_min']:.0f}°C → {w['temp_max']:.0f}°C   💧 {w['humidite']:.0f}%\n"
+        f"🌧️ {pluie}\n"
+        f"☀️ {soleil}"
+    )
+
+
+# "compact" (défaut) : une ligne dense, économe en octets LoRa.
+# "card" : mini tableau de bord multi-lignes, plus lisible sur l'écran du node.
+MESSAGE_STYLES = {
+    "compact": build_message_compact,
+    "card": build_message_card,
+}
+
+
+def build_message(style: str, ville: str, w: dict) -> str:
+    builder = MESSAGE_STYLES.get(style, build_message_compact)
+    return builder(ville, w)
+
+
+def ping_node(host: str, timeout_s: int = 2) -> bool:
+    """Envoie un ping ICMP au node pour le "réveiller" (sortie de veille WiFi)
+    avant d'ouvrir la connexion TCP. Ne bloque jamais le script : si le ping
+    échoue (ICMP filtré, pas de droits suffisants, etc.) on continue quand
+    même la tentative de connexion TCP."""
+    is_windows = platform.system().lower() == "windows"
+    cmd = (
+        ["ping", "-n", "1", "-w", str(timeout_s * 1000), host]
+        if is_windows
+        else ["ping", "-c", "1", "-W", str(timeout_s), host]
+    )
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_s + 3,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+def _install_quiet_thread_excepthook():
+    """Si le node coupe la connexion TCP juste après l'envoi (ex: veille
+    WiFi), un thread interne de la lib meshtastic peut tenter un heartbeat
+    sur un socket déjà fermé et lever un BrokenPipeError dans un thread que
+    l'on ne contrôle pas. C'est inoffensif (le message a déjà été envoyé) :
+    on remplace le traceback complet par une simple ligne d'info."""
+    default_hook = threading.excepthook
+
+    def hook(args):
+        if issubclass(args.exc_type, (BrokenPipeError, ConnectionResetError, OSError)):
+            print(
+                f"(info) Connexion TCP interrompue par le node après l'envoi, ignoré : {args.exc_value}",
+                file=sys.stderr,
+            )
+            return
+        default_hook(args)
+
+    threading.excepthook = hook
 
 
 def find_channel_index(iface: "meshtastic.tcp_interface.TCPInterface", channel_name: str, fallback_index):
@@ -236,6 +340,27 @@ def main():
         "(ou MESHTASTIC_CHANNEL_INDEX dans .env).",
     )
     parser.add_argument(
+        "--style",
+        choices=list(MESSAGE_STYLES.keys()),
+        default=os.environ.get("MESSAGE_STYLE", "compact"),
+        help="Format du message : 'compact' (une ligne) ou 'card' (mini tableau de bord "
+        "multi-lignes). Défaut: compact, ou MESSAGE_STYLE dans .env.",
+    )
+    parser.add_argument(
+        "--no-ping",
+        dest="ping",
+        action="store_false",
+        default=os.environ.get("PING_BEFORE_SEND", "true").strip().lower() not in ("0", "false", "no"),
+        help="Désactive le ping ICMP de réveil du node avant la connexion TCP "
+        "(ou PING_BEFORE_SEND=false dans .env).",
+    )
+    parser.add_argument(
+        "--ping-timeout",
+        type=int,
+        default=int(os.environ.get("PING_TIMEOUT_S", 2)),
+        help="Délai d'attente du ping en secondes (défaut: 2, ou PING_TIMEOUT_S dans .env).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Affiche le message sans se connecter au node ni l'envoyer.",
@@ -250,14 +375,27 @@ def main():
 
     print("Récupération des prévisions météo pour", args.ville, "...")
     weather = fetch_weather(args.lat, args.lon)
-    message = build_message(args.ville, weather)
+    message = build_message(args.style, args.ville, weather)
 
     print("Message généré :")
-    print(f"  {message}  ({len(message)} caractères)")
+    print(f"  {message}  ({len(message.encode('utf-8'))} octets)")
 
     if args.dry_run:
         print("Mode --dry-run : le message n'a pas été envoyé.")
         return
+
+    _install_quiet_thread_excepthook()
+
+    if args.ping:
+        print(f"Ping de {args.host} pour réveiller le node ...")
+        if ping_node(args.host, timeout_s=args.ping_timeout):
+            print("  -> Node accessible (ping OK).")
+        else:
+            print(
+                "  -> Pas de réponse au ping (ICMP peut-être filtré), on continue quand même.",
+                file=sys.stderr,
+            )
+        time.sleep(1)  # laisse le temps au node de sortir de veille avant d'ouvrir le TCP
 
     print(f"Connexion TCP au node Meshtastic {args.host}:{args.port} ...")
     iface = meshtastic.tcp_interface.TCPInterface(hostname=args.host, portNumber=args.port)
@@ -266,8 +404,13 @@ def main():
         print(f"Envoi sur le canal '{args.channel_name}' (index {channel_index}) ...")
         iface.sendText(message, channelIndex=channel_index)
         print("Message envoyé avec succès.")
+        # sendText() ne fait que mettre le message en file d'attente : l'envoi
+        # réel est asynchrone. On laisse un court délai avant de fermer pour
+        # éviter de couper la connexion en pleine transmission.
+        time.sleep(SEND_SETTLE_SECONDS)
     finally:
-        iface.close()
+        with contextlib.suppress(Exception):
+            iface.close()
 
 
 if __name__ == "__main__":
