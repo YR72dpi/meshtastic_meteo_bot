@@ -67,6 +67,12 @@ DEFAULT_VILLE = "Rouen"
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
+# Nombre de tentatives et délai de base (s) en cas d'erreur transitoire de
+# l'API météo (503, timeout, erreur réseau...). Backoff exponentiel :
+# WEATHER_RETRY_BASE_DELAY_S * 2^tentative (2s, 4s, 8s, ... par défaut).
+WEATHER_RETRY_ATTEMPTS = int(os.environ.get("WEATHER_RETRY_ATTEMPTS", 5))
+WEATHER_RETRY_BASE_DELAY_S = float(os.environ.get("WEATHER_RETRY_BASE_DELAY_S", 2))
+
 # Délai (s) laissé après sendText() avant de fermer la connexion, pour laisser
 # le temps au message d'être réellement transmis (voir _install_quiet_thread_excepthook).
 SEND_SETTLE_SECONDS = float(os.environ.get("SEND_SETTLE_SECONDS", 2))
@@ -112,7 +118,12 @@ SNOW_CODES = {71, 73, 75, 77, 85, 86}
 
 
 def fetch_weather(lat: float, lon: float) -> dict:
-    """Récupère les prévisions du jour depuis Open-Meteo (API gratuite, sans clé)."""
+    """Récupère les prévisions du jour depuis Open-Meteo (API gratuite, sans clé).
+
+    Réessaie automatiquement en cas d'erreur transitoire (503, timeout,
+    erreur réseau...) avec un backoff exponentiel, car l'API publique
+    d'Open-Meteo peut occasionnellement renvoyer une indisponibilité
+    momentanée (ex: pic de charge)."""
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -130,9 +141,34 @@ def fetch_weather(lat: float, lon: float) -> dict:
         "timezone": "Europe/Paris",
         "forecast_days": 1,
     }
-    resp = requests.get(OPEN_METEO_URL, params=params, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
+
+    last_error = None
+    for attempt in range(1, WEATHER_RETRY_ATTEMPTS + 1):
+        try:
+            resp = requests.get(OPEN_METEO_URL, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except (requests.exceptions.RequestException,) as exc:
+            last_error = exc
+            is_last_attempt = attempt == WEATHER_RETRY_ATTEMPTS
+            status_code = getattr(exc.response, "status_code", None) if getattr(exc, "response", None) is not None else None
+            # On ne retente que sur les erreurs transitoires (5xx, timeout,
+            # problème réseau) ; une erreur 4xx (ex: 400 mauvais paramètres)
+            # ne se résoudra pas en réessayant, donc on abandonne tout de suite.
+            if status_code is not None and status_code < 500:
+                raise
+            if is_last_attempt:
+                raise
+            delay = WEATHER_RETRY_BASE_DELAY_S * (2 ** (attempt - 1))
+            print(
+                f"Open-Meteo indisponible (tentative {attempt}/{WEATHER_RETRY_ATTEMPTS}: {exc}), "
+                f"nouvelle tentative dans {delay:.0f}s...",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+    else:
+        raise last_error
 
     daily = data["daily"]
     return {

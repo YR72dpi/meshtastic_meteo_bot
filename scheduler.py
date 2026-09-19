@@ -8,11 +8,16 @@ Boucle de planification qui exécute meteo_rouen_meshtastic.py tous les jours
 passage heure d'été / heure d'hiver grâce à zoneinfo).
 
 Variables d'environnement optionnelles :
-    SCHEDULE_HOUR   Heure d'exécution quotidienne (défaut: 8)
-    SCHEDULE_MINUTE Minute d'exécution quotidienne (défaut: 0)
-    RUN_ON_STARTUP  Si "true", exécute aussi une fois immédiatement au
-                    démarrage du conteneur (pratique pour vérifier que tout
-                    fonctionne). Défaut: false.
+    SCHEDULE_HOUR        Heure d'exécution quotidienne (défaut: 8)
+    SCHEDULE_MINUTE      Minute d'exécution quotidienne (défaut: 0)
+    RUN_ON_STARTUP       Si "true", exécute aussi une fois immédiatement au
+                         démarrage du conteneur (pratique pour vérifier que
+                         tout fonctionne). Défaut: false.
+    JOB_RETRY_ATTEMPTS   Nombre de tentatives si l'exécution quotidienne
+                         échoue (ex: panne prolongée de l'API météo ou du
+                         node). Défaut: 3.
+    JOB_RETRY_DELAY_S    Délai (s) entre deux tentatives en cas d'échec.
+                         Défaut: 600 (10 minutes).
 """
 
 import os
@@ -28,6 +33,8 @@ SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "meteo_ro
 RUN_HOUR = int(os.environ.get("SCHEDULE_HOUR", "8"))
 RUN_MINUTE = int(os.environ.get("SCHEDULE_MINUTE", "0"))
 RUN_ON_STARTUP = os.environ.get("RUN_ON_STARTUP", "false").strip().lower() in ("1", "true", "yes")
+JOB_RETRY_ATTEMPTS = int(os.environ.get("JOB_RETRY_ATTEMPTS", 3))
+JOB_RETRY_DELAY_S = float(os.environ.get("JOB_RETRY_DELAY_S", 600))
 
 
 def next_run_time(now: datetime) -> datetime:
@@ -38,17 +45,39 @@ def next_run_time(now: datetime) -> datetime:
 
 
 def run_job():
-    now = datetime.now(PARIS_TZ)
-    print(f"[{now.isoformat()}] Exécution de la publication météo...", flush=True)
-    result = subprocess.run([sys.executable, SCRIPT_PATH])
-    if result.returncode != 0:
+    """Exécute meteo_rouen_meshtastic.py, avec plusieurs tentatives espacées
+    en cas d'échec (ex: panne temporaire de l'API météo ou du node), pour ne
+    pas perdre la publication du jour à cause d'un simple aléa transitoire."""
+    for attempt in range(1, JOB_RETRY_ATTEMPTS + 1):
+        now = datetime.now(PARIS_TZ)
+        print(
+            f"[{now.isoformat()}] Exécution de la publication météo "
+            f"(tentative {attempt}/{JOB_RETRY_ATTEMPTS})...",
+            flush=True,
+        )
+        result = subprocess.run([sys.executable, SCRIPT_PATH])
+        if result.returncode == 0:
+            print(f"[{now.isoformat()}] Publication terminée avec succès.", flush=True)
+            return
+
         print(
             f"[{now.isoformat()}] Erreur : le script a retourné le code {result.returncode}",
             file=sys.stderr,
             flush=True,
         )
-    else:
-        print(f"[{now.isoformat()}] Publication terminée avec succès.", flush=True)
+        if attempt < JOB_RETRY_ATTEMPTS:
+            print(
+                f"Nouvelle tentative dans {JOB_RETRY_DELAY_S / 60:.0f} min...",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(JOB_RETRY_DELAY_S)
+
+    print(
+        f"Abandon après {JOB_RETRY_ATTEMPTS} tentatives : la publication du jour a échoué.",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def main():

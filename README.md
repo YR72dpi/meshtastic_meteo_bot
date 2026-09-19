@@ -27,6 +27,10 @@ Par défaut configuré pour **Rouen**, mais utilisable pour n'importe quelle vil
   représentatif de la météo du jour (⛈️❄️🌧️🌫️☁️⛅☀️).
 - 🛡️ Fermeture robuste de la connexion : les node qui coupent le TCP juste
   après réception (veille WiFi) ne génèrent plus de traceback bruyant.
+- 🔁 **Résilient aux pannes transitoires** : réessaie automatiquement (backoff
+  exponentiel) si l'API météo répond une erreur temporaire (503, timeout...),
+  et le scheduler relance la publication du jour plusieurs fois espacées si
+  elle échoue malgré tout, plutôt que d'attendre le lendemain.
 - ⏰ Envoi **automatique chaque jour à 8h00, heure de Paris** (gère le
   passage heure d'été/hiver), via un conteneur Docker.
 - 🔧 Entièrement configurable via un fichier `.env` (IP du node, ville,
@@ -139,8 +143,12 @@ python meteo_rouen_meshtastic.py --no-ping          # désactive le ping de rév
 | `PING_BEFORE_SEND` | `true` | Ping ICMP de réveil du node avant la connexion TCP |
 | `PING_TIMEOUT_S` | `2` | Délai d'attente du ping (secondes) |
 | `SEND_SETTLE_SECONDS` | `2` | Délai après l'envoi avant de fermer la connexion TCP |
+| `WEATHER_RETRY_ATTEMPTS` | `5` | Nombre de tentatives sur erreur transitoire de l'API météo |
+| `WEATHER_RETRY_BASE_DELAY_S` | `2` | Délai de base (s) du backoff exponentiel entre tentatives |
 | `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` | `8` / `0` | Heure d'envoi quotidien (heure de Paris) |
 | `RUN_ON_STARTUP` | `false` | Envoie aussi un message immédiatement au démarrage du conteneur |
+| `JOB_RETRY_ATTEMPTS` | `3` | Nombre de tentatives de la publication quotidienne en cas d'échec |
+| `JOB_RETRY_DELAY_S` | `600` | Délai (s) entre deux tentatives de publication quotidienne |
 
 ## 📝 Licence
 
