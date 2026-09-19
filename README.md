@@ -23,8 +23,8 @@ Par défaut configuré pour **Rouen**, mais utilisable pour n'importe quelle vil
   (résolution automatique de l'index du canal par son nom).
 - 📶 **Ping ICMP de réveil** du node avant la connexion TCP (utile si le node
   est en veille WiFi) ; jamais bloquant, même si l'ICMP est filtré.
-- 🎨 Deux formats de message au choix (voir ci-dessous), avec emoji
-  représentatif de la météo du jour (⛈️❄️🌧️🌫️☁️⛅☀️).
+- 🎨 Message façon mini tableau de bord multi-lignes, avec emoji représentatif
+  de la météo du jour (⛈️❄️🌧️🌫️☁️⛅☀️).
 - 🛡️ Fermeture robuste de la connexion : les node qui coupent le TCP juste
   après réception (veille WiFi) ne génèrent plus de traceback bruyant.
 - 🔁 **Résilient aux pannes transitoires** : réessaie automatiquement (backoff
@@ -34,12 +34,12 @@ Par défaut configuré pour **Rouen**, mais utilisable pour n'importe quelle vil
 - ⏰ Envoi **automatique chaque jour à 8h00, heure de Paris** (gère le
   passage heure d'été/hiver), via un conteneur Docker.
 - 🔧 Entièrement configurable via un fichier `.env` (IP du node, ville,
-  coordonnées, style de message, heure d'envoi...).
+  coordonnées, heure d'envoi...).
 - 🧪 Mode `--dry-run` pour prévisualiser le message sans rien envoyer.
 
-## 🎨 Formats de message
+## 🎨 Format du message
 
-**`card`** — mini tableau de bord multi-lignes, aéré et lisible :
+Le bot publie une mini "carte" multi-lignes façon tableau de bord, aérée et lisible :
 
 ```
 🌧️ Météo Rouen — 18/09 (Averses légères)
@@ -47,15 +47,6 @@ Par défaut configuré pour **Rouen**, mais utilisable pour n'importe quelle vil
 🌧️ Pluie possible (5%)
 ☀️ Fort (7.5h)
 ```
-
-**`compact`** (défaut historique) — une seule ligne, dense mais scannable :
-
-```
-🌧️ Rouen 18/09 : Averses légères | 🌡️ 12-20°C  💧 77% | 🌧️ Pluie possible (5%) | ☀️ Fort (7.5h)
-```
-
-Choix via `--style card` / `--style compact` en ligne de commande, ou
-`MESSAGE_STYLE=card` dans `.env`.
 
 ## 🚀 Démarrage rapide
 
@@ -72,8 +63,8 @@ MESHTASTIC_HOST=192.168.1.50
 ```
 
 Voir [.env.example](.env.example) pour toutes les options disponibles
-(port, nom du canal, ville/coordonnées, style de message, ping de réveil,
-heure d'envoi quotidien...).
+(port, nom du canal, ville/coordonnées, ping de réveil, heure d'envoi
+quotidien...).
 
 ### 2. Lancer avec Docker
 
@@ -113,7 +104,7 @@ Les options peuvent aussi être passées en ligne de commande (elles
 surchargent le `.env`) :
 
 ```bash
-python meteo_rouen_meshtastic.py --host 192.168.1.50 --ville "Paris" --lat 48.8566 --lon 2.3522 --style card
+python meteo_rouen_meshtastic.py --host 192.168.1.50 --ville "Paris" --lat 48.8566 --lon 2.3522
 python meteo_rouen_meshtastic.py --no-ping          # désactive le ping de réveil
 ```
 
@@ -139,7 +130,6 @@ python meteo_rouen_meshtastic.py --no-ping          # désactive le ping de rév
 | `MESHTASTIC_CHANNEL_INDEX` | — | Force l'index de canal si le nom n'est pas résolu |
 | `METEO_VILLE` | `Rouen` | Nom affiché dans le message |
 | `METEO_LAT` / `METEO_LON` | 49.4432 / 1.0999 | Coordonnées GPS utilisées pour la prévision |
-| `MESSAGE_STYLE` | `compact` | Format du message : `compact` (1 ligne) ou `card` (multi-lignes) |
 | `PING_BEFORE_SEND` | `true` | Ping ICMP de réveil du node avant la connexion TCP |
 | `PING_TIMEOUT_S` | `2` | Délai d'attente du ping (secondes) |
 | `SEND_SETTLE_SECONDS` | `2` | Délai après l'envoi avant de fermer la connexion TCP |

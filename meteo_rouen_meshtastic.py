@@ -20,7 +20,6 @@ Utilisation :
     python meteo_rouen_meshtastic.py --host 192.168.1.50
     python meteo_rouen_meshtastic.py --channel-index 2
     python meteo_rouen_meshtastic.py --ville "Paris" --lat 48.8566 --lon 2.3522
-    python meteo_rouen_meshtastic.py --style card
 
 Le script cherche automatiquement l'index du canal nommé "meteo" configuré
 sur le node. Si aucun canal de ce nom n'est trouvé, on peut forcer l'index
@@ -219,23 +218,8 @@ def weather_icon(weathercode: int) -> str:
     return "☀️"  # 0 (ciel dégagé), 1 (plutôt dégagé) ou code inconnu
 
 
-def build_message_compact(ville: str, w: dict) -> str:
-    """Proposition 1 : une seule ligne, dense mais scannable en un coup d'œil."""
-    date_str = datetime.strptime(w["date"], "%Y-%m-%d").strftime("%d/%m")
-    icon = weather_icon(w["weathercode"])
-    condition = WMO_CODES.get(w["weathercode"], "Conditions variables")
-    pluie = libelle_pluie_orage(w["weathercode"], w["proba_precip"])
-    soleil = niveau_ensoleillement(w["nuages"], w["ensoleillement_s"])
-
-    return (
-        f"{icon} {ville} {date_str} : {condition} | "
-        f"🌡️ {w['temp_min']:.0f}-{w['temp_max']:.0f}°C  💧 {w['humidite']:.0f}% | "
-        f"🌧️ {pluie} | ☀️ {soleil}"
-    )
-
-
-def build_message_card(ville: str, w: dict) -> str:
-    """Proposition 2 : mini "carte" multi-lignes, plus aérée façon dashboard."""
+def build_message(ville: str, w: dict) -> str:
+    """Mini "carte" multi-lignes façon tableau de bord, plus lisible à l'écran."""
     date_str = datetime.strptime(w["date"], "%Y-%m-%d").strftime("%d/%m")
     icon = weather_icon(w["weathercode"])
     condition = WMO_CODES.get(w["weathercode"], "Conditions variables")
@@ -246,21 +230,10 @@ def build_message_card(ville: str, w: dict) -> str:
         f"{icon} Météo {ville} — {date_str} ({condition})\n"
         f"🌡️ {w['temp_min']:.0f}°C → {w['temp_max']:.0f}°C   💧 {w['humidite']:.0f}%\n"
         f"🌧️ {pluie}\n"
-        f"☀️ {soleil}"
+        f"☀️ {soleil}\n"
+        f"\n"
+        f"Github : YR72dpi/meshtastic_meteo_bot"
     )
-
-
-# "compact" (défaut) : une ligne dense, économe en octets LoRa.
-# "card" : mini tableau de bord multi-lignes, plus lisible sur l'écran du node.
-MESSAGE_STYLES = {
-    "compact": build_message_compact,
-    "card": build_message_card,
-}
-
-
-def build_message(style: str, ville: str, w: dict) -> str:
-    builder = MESSAGE_STYLES.get(style, build_message_compact)
-    return builder(ville, w)
 
 
 def ping_node(host: str, timeout_s: int = 2) -> bool:
@@ -376,13 +349,6 @@ def main():
         "(ou MESHTASTIC_CHANNEL_INDEX dans .env).",
     )
     parser.add_argument(
-        "--style",
-        choices=list(MESSAGE_STYLES.keys()),
-        default=os.environ.get("MESSAGE_STYLE", "compact"),
-        help="Format du message : 'compact' (une ligne) ou 'card' (mini tableau de bord "
-        "multi-lignes). Défaut: compact, ou MESSAGE_STYLE dans .env.",
-    )
-    parser.add_argument(
         "--no-ping",
         dest="ping",
         action="store_false",
@@ -411,7 +377,7 @@ def main():
 
     print("Récupération des prévisions météo pour", args.ville, "...")
     weather = fetch_weather(args.lat, args.lon)
-    message = build_message(args.style, args.ville, weather)
+    message = build_message(args.ville, weather)
 
     print("Message généré :")
     print(f"  {message}  ({len(message.encode('utf-8'))} octets)")
