@@ -72,8 +72,12 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 WEATHER_RETRY_ATTEMPTS = int(os.environ.get("WEATHER_RETRY_ATTEMPTS", 5))
 WEATHER_RETRY_BASE_DELAY_S = float(os.environ.get("WEATHER_RETRY_BASE_DELAY_S", 2))
 
-# Délai (s) laissé après sendText() avant de fermer la connexion, pour laisser
-# le temps au message d'être réellement transmis (voir _install_quiet_thread_excepthook).
+# Délai (s) max d'attente d'un ack/nak mesh (routing app) après sendText().
+ACK_TIMEOUT_SECONDS = float(os.environ.get("ACK_TIMEOUT_SECONDS", 30))
+
+# Délai (s) laissé après réception (ou non) de l'ack avant de fermer la
+# connexion, pour laisser le temps au socket de se vider (voir
+# _install_quiet_thread_excepthook).
 SEND_SETTLE_SECONDS = float(os.environ.get("SEND_SETTLE_SECONDS", 2))
 
 # Table de correspondance (simplifiée) des codes météo WMO utilisés par Open-Meteo
@@ -404,11 +408,35 @@ def main():
     try:
         channel_index = find_channel_index(iface, args.channel_name, args.channel_index)
         print(f"Envoi sur le canal '{args.channel_name}' (index {channel_index}) ...")
-        iface.sendText(message, channelIndex=channel_index)
-        print("Message envoyé avec succès.")
-        # sendText() ne fait que mettre le message en file d'attente : l'envoi
-        # réel est asynchrone. On laisse un court délai avant de fermer pour
-        # éviter de couper la connexion en pleine transmission.
+
+        ack_event = threading.Event()
+        ack_status = {"success": None, "error": None}
+
+        # Nommée "onAckNak" : la lib meshtastic reconnaît ce nom pour livrer
+        # aussi les ACK simples (pas seulement les NAK/réponses applicatives).
+        def onAckNak(p):
+            routing = p.get("decoded", {}).get("routing", {})
+            ack_status["error"] = routing.get("errorReason", "UNKNOWN")
+            ack_status["success"] = ack_status["error"] == "NONE"
+            ack_event.set()
+
+        iface.sendText(message, channelIndex=channel_index, wantAck=True, onResponse=onAckNak)
+        print(f"Message mis en file d'attente, attente d'un accusé de réception (max {ACK_TIMEOUT_SECONDS:.0f}s) ...")
+
+        if not ack_event.wait(timeout=ACK_TIMEOUT_SECONDS):
+            print(
+                f"Aucun accusé de réception reçu après {ACK_TIMEOUT_SECONDS:.0f}s : "
+                "le message n'a probablement pas été transmis sur le mesh.",
+                file=sys.stderr,
+            )
+        elif ack_status["success"]:
+            print("Message envoyé et acquitté par le réseau mesh.")
+        else:
+            print(
+                f"Message NON acquitté par le réseau mesh (erreur : {ack_status['error']}).",
+                file=sys.stderr,
+            )
+
         time.sleep(SEND_SETTLE_SECONDS)
     finally:
         with contextlib.suppress(Exception):
