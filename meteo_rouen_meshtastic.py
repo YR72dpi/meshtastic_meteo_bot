@@ -230,9 +230,7 @@ def build_message(ville: str, w: dict) -> str:
         f"{icon} Météo {ville} — {date_str} ({condition})\n"
         f"🌡️ {w['temp_min']:.0f}°C → {w['temp_max']:.0f}°C   💧 {w['humidite']:.0f}%\n"
         f"🌧️ {pluie}\n"
-        f"☀️ {soleil}\n"
-        f"\n"
-        f"Github : YR72dpi/meshtastic_meteo_bot"
+        f"☀️ {soleil}"
     )
 
 
