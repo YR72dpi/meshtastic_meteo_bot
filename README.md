@@ -1,54 +1,43 @@
-# 🌦️ Meshtastic Météo Bot
+# 🌦️ Meshtastic Weather Bot
 
-Publie chaque jour la **prévision météo du jour** sur un canal Meshtastic :
-température, hygrométrie, risque de pluie/orage et niveau d'ensoleillement.
-Le bot se connecte en **TCP** à votre node, le réveille au besoin, puis
-diffuse un message soigné sur le canal `meteo`.
+Publishes the **daily weather forecast** to a Meshtastic channel:
+temperature, humidity, rain/thunderstorm probability, and sunshine duration.
+The bot connects to your node via **TCP**, wakes it up if needed, then
+publishes a formatted message to the `meteo` channel.
 
-Par défaut configuré pour **Rouen**, mais utilisable pour n'importe quelle ville.
+By default, it is configured for **Rouen**, but it can be used with any city.
 
-```
-🌧️ Météo Rouen — 18/09 (Averses légères)
+```text
+🌧️ Rouen Weather — 18/09 (Light showers)
 🌡️ 12°C → 20°C   💧 77%
-🌧️ Pluie possible (5%)
-☀️ Fort (7.5h)
+🌧️ Rain possible (5%)
+☀️ Strong (7.5h)
 ```
 
-## ✨ Fonctionnalités
+## ✨ Features
 
-- 🌡️ **Prévision complète du jour** (min/max, hygrométrie, probabilité de
-  pluie/orage, ensoleillement) via l'API gratuite [Open-Meteo](https://open-meteo.com/)
-  (aucune clé requise).
-- 📡 Connexion **TCP** à un node Meshtastic, publication sur le canal `meteo`
-  (résolution automatique de l'index du canal par son nom).
-- 📶 **Ping ICMP de réveil** du node avant la connexion TCP (utile si le node
-  est en veille WiFi) ; jamais bloquant, même si l'ICMP est filtré.
-- 🎨 Message façon mini tableau de bord multi-lignes, avec emoji représentatif
-  de la météo du jour (⛈️❄️🌧️🌫️☁️⛅☀️).
-- 🛡️ Fermeture robuste de la connexion : les node qui coupent le TCP juste
-  après réception (veille WiFi) ne génèrent plus de traceback bruyant.
-- 🔁 **Résilient aux pannes transitoires** : réessaie automatiquement (backoff
-  exponentiel) si l'API météo répond une erreur temporaire (503, timeout...),
-  et le scheduler relance la publication du jour plusieurs fois espacées si
-  elle échoue malgré tout, plutôt que d'attendre le lendemain.
-- ⏰ Envoi **automatique chaque jour à 8h00, heure de Paris** (gère le
-  passage heure d'été/hiver), via un conteneur Docker.
-- 🔧 Entièrement configurable via un fichier `.env` (IP du node, ville,
-  coordonnées, heure d'envoi...).
-- 🧪 Mode `--dry-run` pour prévisualiser le message sans rien envoyer.
+* 🌡️ **Full daily forecast** (min/max temperature, humidity, rain/thunderstorm probability, sunshine duration) via the free [Open-Meteo](https://open-meteo.com/) API (no API key required).
+* 📡 **TCP connection** to a Meshtastic node, publishing to the `meteo` channel (automatically resolves the channel index by name).
+* 📶 **ICMP wake-up ping** before connecting via TCP (useful when the node's Wi-Fi is sleeping); never blocks the bot, even when ICMP is filtered.
+* 🎨 **Multi-line dashboard-style message**, with a weather emoji representing the day's conditions (⛈️❄️🌧️🌫️☁️⛅☀️).
+* 🛡️ **Robust connection shutdown**: nodes that close the TCP connection immediately after receiving the message (e.g. Wi-Fi sleep) no longer produce noisy tracebacks.
+* 🔁 **Resilient to temporary failures**: automatically retries with exponential backoff when the weather API returns a temporary error (503, timeout, etc.). If publication still fails, the scheduler retries the daily job several times at spaced intervals instead of waiting until the next day.
+* ⏰ **Automatic daily delivery at 8:00 AM Paris time**, including automatic daylight saving time handling, using a Docker container.
+* 🔧 **Fully configurable** through a `.env` file (node IP, city, coordinates, delivery time, etc.).
+* 🧪 `--dry-run` mode to preview the message without sending anything.
 
-## 🎨 Format du message
+## 🎨 Message Format
 
-Le bot publie une mini "carte" multi-lignes façon tableau de bord, aérée et lisible :
+The bot publishes a small multi-line "card" in a dashboard-like format, designed to be clean and easy to read:
 
-```
-🌧️ Météo Rouen — 18/09 (Averses légères)
+```text
+🌧️ Rouen Weather — 18/09 (Light showers)
 🌡️ 12°C → 20°C   💧 77%
-🌧️ Pluie possible (5%)
-☀️ Fort (7.5h)
+🌧️ Rain possible (5%)
+☀️ Strong (7.5h)
 ```
 
-## 🚀 Démarrage rapide
+## 🚀 Quick Start
 
 ### 1. Configuration
 
@@ -56,43 +45,43 @@ Le bot publie une mini "carte" multi-lignes façon tableau de bord, aérée et l
 cp .env.example .env
 ```
 
-Éditez `.env` et renseignez au minimum l'IP de votre node :
+Edit `.env` and provide at least your node's IP address:
 
 ```dotenv
 MESHTASTIC_HOST=192.168.1.50
 ```
 
-Voir [.env.example](.env.example) pour toutes les options disponibles
-(port, nom du canal, ville/coordonnées, ping de réveil, heure d'envoi
-quotidien...).
+See [.env.example](.env.example) for all available options
+(port, channel name, city/coordinates, wake-up ping, daily delivery time,
+etc.).
 
-### 2. Lancer avec Docker
+### 2. Run with Docker
 
-Un [Makefile](Makefile) fournit des raccourcis pratiques :
-
-```bash
-make up      # build + démarre le scheduler (envoi quotidien à 8h)
-make logs    # suit les logs en direct
-make down    # arrête le conteneur
-```
-
-### 3. Tester manuellement
+A [Makefile](Makefile) provides convenient shortcuts:
 
 ```bash
-make test    # prévisualise le message (--dry-run, aucun envoi)
-make send    # envoie le message immédiatement sur le canal
+make up      # build + start the scheduler (daily delivery at 8 AM)
+make logs    # follow logs in real time
+make down    # stop the container
 ```
 
-Après une modification du code ou du `.env` :
+### 3. Test Manually
 
 ```bash
-make update  # reconstruit l'image et recrée le conteneur
+make test    # preview the message (--dry-run, nothing is sent)
+make send    # immediately send the message to the channel
 ```
 
-➡️ Voir `make help` pour la liste complète des commandes (`build`, `up`,
-`down`, `restart`, `update`, `logs`, `ps`, `test`, `send`, `sh`, `clean`).
+After modifying the code or `.env`:
 
-## 🐍 Utilisation sans Docker
+```bash
+make update  # rebuild the image and recreate the container
+```
+
+➡️ Run `make help` to see the complete list of commands
+(`build`, `up`, `down`, `restart`, `update`, `logs`, `ps`, `test`, `send`, `sh`, `clean`).
+
+## 🐍 Running Without Docker
 
 ```bash
 pip install -r requirements.txt
@@ -100,46 +89,46 @@ python meteo_rouen_meshtastic.py --dry-run
 python meteo_rouen_meshtastic.py
 ```
 
-Les options peuvent aussi être passées en ligne de commande (elles
-surchargent le `.env`) :
+Options can also be passed directly through the command line
+(overriding values from `.env`):
 
 ```bash
 python meteo_rouen_meshtastic.py --host 192.168.1.50 --ville "Paris" --lat 48.8566 --lon 2.3522
-python meteo_rouen_meshtastic.py --no-ping          # désactive le ping de réveil
+python meteo_rouen_meshtastic.py --no-ping          # disable the wake-up ping
 ```
 
-## 📁 Structure du projet
+## 📁 Project Structure
 
-| Fichier | Rôle |
-|---|---|
-| [meteo_rouen_meshtastic.py](meteo_rouen_meshtastic.py) | Script principal : récupère la météo, réveille le node (ping) et publie sur Meshtastic |
-| [scheduler.py](scheduler.py) | Boucle de planification quotidienne (8h, heure de Paris) |
-| [Dockerfile](Dockerfile) | Image du conteneur (Python + `iputils-ping` pour le ping de réveil) |
-| [docker-compose.yml](docker-compose.yml) | Orchestration du conteneur |
-| [Makefile](Makefile) | Raccourcis `make build/up/down/test/send/update/...` |
-| [requirements.txt](requirements.txt) | Dépendances Python |
-| [.env.example](.env.example) | Modèle de configuration à copier en `.env` |
+| File                                                   | Purpose                                                                               |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| [meteo_rouen_meshtastic.py](meteo_rouen_meshtastic.py) | Main script: fetches weather data, wakes the node (ping), and publishes to Meshtastic |
+| [scheduler.py](scheduler.py)                           | Daily scheduling loop (8 AM, Paris time)                                              |
+| [Dockerfile](Dockerfile)                               | Container image (Python + `iputils-ping` for the wake-up ping)                        |
+| [docker-compose.yml](docker-compose.yml)               | Container orchestration                                                               |
+| [Makefile](Makefile)                                   | `make build/up/down/test/send/update/...` shortcuts                                   |
+| [requirements.txt](requirements.txt)                   | Python dependencies                                                                   |
+| [.env.example](.env.example)                           | Configuration template to copy to `.env`                                              |
 
-## ⚙️ Variables d'environnement
+## ⚙️ Environment Variables
 
-| Variable | Défaut | Description |
-|---|---|---|
-| `MESHTASTIC_HOST` | *(obligatoire)* | IP ou hostname du node Meshtastic |
-| `MESHTASTIC_PORT` | `4403` | Port TCP de l'API Meshtastic |
-| `MESHTASTIC_CHANNEL_NAME` | `meteo` | Nom du canal cible |
-| `MESHTASTIC_CHANNEL_INDEX` | — | Force l'index de canal si le nom n'est pas résolu |
-| `METEO_VILLE` | `Rouen` | Nom affiché dans le message |
-| `METEO_LAT` / `METEO_LON` | 49.4432 / 1.0999 | Coordonnées GPS utilisées pour la prévision |
-| `PING_BEFORE_SEND` | `true` | Ping ICMP de réveil du node avant la connexion TCP |
-| `PING_TIMEOUT_S` | `2` | Délai d'attente du ping (secondes) |
-| `SEND_SETTLE_SECONDS` | `2` | Délai après l'envoi avant de fermer la connexion TCP |
-| `WEATHER_RETRY_ATTEMPTS` | `5` | Nombre de tentatives sur erreur transitoire de l'API météo |
-| `WEATHER_RETRY_BASE_DELAY_S` | `2` | Délai de base (s) du backoff exponentiel entre tentatives |
-| `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` | `8` / `0` | Heure d'envoi quotidien (heure de Paris) |
-| `RUN_ON_STARTUP` | `false` | Envoie aussi un message immédiatement au démarrage du conteneur |
-| `JOB_RETRY_ATTEMPTS` | `3` | Nombre de tentatives de la publication quotidienne en cas d'échec |
-| `JOB_RETRY_DELAY_S` | `600` | Délai (s) entre deux tentatives de publication quotidienne |
+| Variable                            | Default          | Description                                                          |
+| ----------------------------------- | ---------------- | -------------------------------------------------------------------- |
+| `MESHTASTIC_HOST`                   | *(required)*     | IP address or hostname of the Meshtastic node                        |
+| `MESHTASTIC_PORT`                   | `4403`           | Meshtastic TCP API port                                              |
+| `MESHTASTIC_CHANNEL_NAME`           | `meteo`          | Target channel name                                                  |
+| `MESHTASTIC_CHANNEL_INDEX`          | —                | Force the channel index if the name cannot be resolved               |
+| `METEO_VILLE`                       | `Rouen`          | City name displayed in the message                                   |
+| `METEO_LAT` / `METEO_LON`           | 49.4432 / 1.0999 | GPS coordinates used for the forecast                                |
+| `PING_BEFORE_SEND`                  | `true`           | Send an ICMP wake-up ping before connecting via TCP                  |
+| `PING_TIMEOUT_S`                    | `2`              | Ping timeout in seconds                                              |
+| `SEND_SETTLE_SECONDS`               | `2`              | Delay after sending before closing the TCP connection                |
+| `WEATHER_RETRY_ATTEMPTS`            | `5`              | Number of attempts when the weather API encounters a transient error |
+| `WEATHER_RETRY_BASE_DELAY_S`        | `2`              | Base delay (seconds) for exponential backoff between attempts        |
+| `SCHEDULE_HOUR` / `SCHEDULE_MINUTE` | `8` / `0`        | Daily delivery time (Paris time)                                     |
+| `RUN_ON_STARTUP`                    | `false`          | Also send a message immediately when the container starts            |
+| `JOB_RETRY_ATTEMPTS`                | `3`              | Number of attempts for the daily publication if it fails             |
+| `JOB_RETRY_DELAY_S`                 | `600`            | Delay (seconds) between daily publication attempts                   |
 
-## 📝 Licence
+## 📝 License
 
-Projet personnel, sans licence spécifique — à adapter selon vos besoins.
+Personal project, no specific license — adapt it to your needs.
