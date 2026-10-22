@@ -131,4 +131,8 @@ python meteo_rouen_meshtastic.py --no-ping          # disable the wake-up ping
 
 ## 📝 License
 
-Personal project, no specific license — adapt it to your needs.
+Ce projet est distribué sous les termes de la **GNU General Public License
+v3.0 uniquement** (GPL-3.0-only). Consultez le fichier [LICENSE](LICENSE)
+pour obtenir le texte intégral de la licence.
+
+Les dépendances tierces restent soumises à leurs propres licences.
