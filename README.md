@@ -1,5 +1,7 @@
 # 🌦️ Meshtastic Weather Bot
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 Publishes the **daily weather forecast** to a Meshtastic channel:
 temperature, humidity, rain/thunderstorm probability, and sunshine duration.
 The bot connects to your node via **TCP**, wakes it up if needed, then
