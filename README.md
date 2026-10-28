@@ -19,12 +19,14 @@ By default, it is configured for **Rouen**, but it can be used with any city.
 ## ✨ Features
 
 * 🌡️ **Full daily forecast** (min/max temperature, humidity, rain/thunderstorm probability, sunshine duration) via the free [Open-Meteo](https://open-meteo.com/) API (no API key required).
+* 🚨 **Weather vigilance alerts** from Météo-France (via the keyless MeteoAlarm feed): orange/red alerts for the configured department, sent as a separate channel message.
 * 📡 **TCP connection** to a Meshtastic node, publishing to the `meteo` channel (automatically resolves the channel index by name).
 * 📶 **ICMP wake-up ping** before connecting via TCP (useful when the node's Wi-Fi is sleeping); never blocks the bot, even when ICMP is filtered.
 * 🎨 **Multi-line dashboard-style message**, with a weather emoji representing the day's conditions (⛈️❄️🌧️🌫️☁️⛅☀️).
 * 🛡️ **Robust connection shutdown**: nodes that close the TCP connection immediately after receiving the message (e.g. Wi-Fi sleep) no longer produce noisy tracebacks.
 * 🔁 **Resilient to temporary failures**: automatically retries with exponential backoff when the weather API returns a temporary error (503, timeout, etc.). If publication still fails, the scheduler retries the daily job several times at spaced intervals instead of waiting until the next day.
 * ⏰ **Automatic daily delivery at 8:00 AM Paris time**, including automatic daylight saving time handling, using a Docker container.
+* 🚨 **Hourly alert check**: vigilance is checked every hour; a Meshtastic message is sent only when a new orange/red alert appears. An alert already announced is not repeated every hour.
 * 🔧 **Fully configurable** through a `.env` file (node IP, city, coordinates, delivery time, etc.).
 * 🧪 `--dry-run` mode to preview the message without sending anything.
 
@@ -37,6 +39,13 @@ The bot publishes a small multi-line "card" in a dashboard-like format, designed
 🌡️ 12°C → 20°C   💧 77%
 🌧️ Rain possible (5%)
 ☀️ Strong (7.5h)
+```
+
+When Météo-France reports an orange or red alert, the bot also sends a
+separate message to the channel, for example:
+
+```text
+🚨 Vigilance météo 76 : ROUGE orages, ORANGE vent
 ```
 
 ## 🚀 Quick Start
@@ -56,6 +65,15 @@ MESHTASTIC_HOST=192.168.1.50
 See [.env.example](.env.example) for all available options
 (port, channel name, city/coordinates, wake-up ping, daily delivery time,
 etc.).
+
+The vigilance check uses the public MeteoAlarm feed (published by Météo-France,
+no API key required). The bot sends orange/red alerts for the department set in
+`METEO_DEPARTEMENT` (default `76`, Seine-Maritime; only this department is
+mapped for now). The daily forecast includes the vigilance status, and the
+alerts are checked every hour: a message is sent only when a new orange/red
+alert appears (the state is kept in `alerts_state.json`, or `ALERT_STATE_FILE`).
+If the feed is unavailable, the daily forecast states that vigilance could not
+be checked, and the hourly check simply waits for the next run.
 
 ### 2. Run with Docker
 
@@ -104,7 +122,7 @@ python meteo_rouen_meshtastic.py --no-ping          # disable the wake-up ping
 | File                                                   | Purpose                                                                               |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | [meteo_rouen_meshtastic.py](meteo_rouen_meshtastic.py) | Main script: fetches weather data, wakes the node (ping), and publishes to Meshtastic |
-| [scheduler.py](scheduler.py)                           | Daily scheduling loop (8 AM, Paris time)                                              |
+| [scheduler.py](scheduler.py)                           | Daily forecast (8 AM) and hourly alert check loop, Paris time                         |
 | [Dockerfile](Dockerfile)                               | Container image (Python + `iputils-ping` for the wake-up ping)                        |
 | [docker-compose.yml](docker-compose.yml)               | Container orchestration                                                               |
 | [Makefile](Makefile)                                   | `make build/up/down/test/send/update/...` shortcuts                                   |
@@ -121,6 +139,7 @@ python meteo_rouen_meshtastic.py --no-ping          # disable the wake-up ping
 | `MESHTASTIC_CHANNEL_INDEX`          | —                | Force the channel index if the name cannot be resolved               |
 | `METEO_VILLE`                       | `Rouen`          | City name displayed in the message                                   |
 | `METEO_LAT` / `METEO_LON`           | 49.4432 / 1.0999 | GPS coordinates used for the forecast                                |
+| `METEO_DEPARTEMENT`                   | `76`             | Department code used for official Météo-France vigilance alerts      |
 | `PING_BEFORE_SEND`                  | `true`           | Send an ICMP wake-up ping before connecting via TCP                  |
 | `PING_TIMEOUT_S`                    | `2`              | Ping timeout in seconds                                              |
 | `SEND_SETTLE_SECONDS`               | `2`              | Delay after sending before closing the TCP connection                |

@@ -33,13 +33,16 @@ si le node filtre l'ICMP, le script continue quand même.
 
 import argparse
 import contextlib
+import json
 import os
 import platform
 import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime
+from typing import List, Optional
 
 import requests
 
@@ -66,6 +69,35 @@ DEFAULT_LON = 1.0943
 DEFAULT_VILLE = "Rouen"
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+# Flux Atom/CAP public (sans clé) de MeteoAlarm, alimenté par Météo-France.
+METEOALARM_FRANCE_URL = "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-france"
+CAP_NS = "{urn:oasis:names:tc:emergency:cap:1.2}"
+ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+# Fichier mémorisant les alertes déjà envoyées (évite les doublons horaires).
+ALERT_STATE_PATH = os.environ.get(
+    "ALERT_STATE_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "alerts_state.json"),
+)
+
+# Nom du département tel qu'il apparaît dans le flux (cap:areaDesc).
+VIGILANCE_DEPARTEMENTS = {"76": "Seine-Maritime"}
+
+# Mots-clés du type d'événement CAP (en anglais) vers le nom français.
+VIGILANCE_PHENOMENA = (
+    ("thunderstorm", "orages"),
+    ("wind", "vent"),
+    ("rain", "pluie-inondation"),
+    ("flood", "crues"),
+    ("snow", "neige/verglas"),
+    ("ice", "neige/verglas"),
+    ("high temperature", "canicule"),
+    ("low temperature", "grand froid"),
+    ("avalanche", "avalanches"),
+    ("coastal", "vagues-submersion"),
+)
+# Niveaux de sévérité CAP retenus (Minor = jaune, ignoré).
+VIGILANCE_SEVERITIES = {"Moderate": "ORANGE", "Severe": "ROUGE", "Extreme": "ROUGE"}
 
 # Nombre de tentatives et délai de base (s) en cas d'erreur transitoire de
 # l'API météo (503, timeout, erreur réseau...). Backoff exponentiel :
@@ -187,6 +219,59 @@ def fetch_weather(lat: float, lon: float) -> dict:
     }
 
 
+def fetch_vigilance(departement: str) -> Optional[List[str]]:
+    """Récupère les vigilances orange/rouge en cours pour le département.
+
+    Source : flux MeteoAlarm (Météo-France), sans clé d'API.
+    Retourne None si la vigilance n'a pas pu être vérifiée, afin de ne pas
+    présenter une indisponibilité de l'API comme une absence d'alerte.
+    """
+    department_name = VIGILANCE_DEPARTEMENTS.get(str(departement).zfill(2))
+    if department_name is None:
+        print(
+            f"Département {departement} non configuré pour la vigilance "
+            f"(connus : {', '.join(VIGILANCE_DEPARTEMENTS)}).",
+            file=sys.stderr,
+        )
+        return None
+
+    try:
+        response = requests.get(METEOALARM_FRANCE_URL, timeout=15)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+    except (requests.exceptions.RequestException, ET.ParseError) as exc:
+        print(f"Impossible de récupérer la vigilance MeteoAlarm : {exc}", file=sys.stderr)
+        return None
+
+    alerts = []
+    try:
+        for entry in root.iter(f"{ATOM_NS}entry"):
+            areas = [
+                (element.text or "").strip() for element in entry.iter(f"{CAP_NS}areaDesc")
+            ]
+            if department_name not in areas:
+                continue
+            severity = next(
+                (element.text or "" for element in entry.iter(f"{CAP_NS}severity")), ""
+            )
+            color = VIGILANCE_SEVERITIES.get(severity.strip())
+            if color is None:
+                continue
+            event = next(
+                (element.text or "" for element in entry.iter(f"{CAP_NS}event")), ""
+            ).strip().lower()
+            phenomenon = next(
+                (name for key, name in VIGILANCE_PHENOMENA if key in event),
+                event or "phénomène inconnu",
+            )
+            alerts.append(f"{color} {phenomenon}")
+    except (AttributeError, TypeError) as exc:
+        print(f"Données de vigilance MeteoAlarm invalides : {exc}", file=sys.stderr)
+        return None
+
+    return alerts
+
+
 def niveau_ensoleillement(nuages: float, duree_ensoleillement_s: float) -> str:
     """Convertit couverture nuageuse (%) et durée d'ensoleillement (s) en un libellé simple."""
     heures = duree_ensoleillement_s / 3600.0
@@ -237,6 +322,56 @@ def build_message(ville: str, w: dict) -> str:
         f"🌧️ {pluie}\n"
         f"☀️ {soleil}"
     )
+
+
+def build_alert_messages(vigilance: List[str], departement: str) -> List[str]:
+    """Construit les message(s) d'alerte orange/rouge, découpés pour tenir dans un paquet Meshtastic."""
+    messages = []
+    prefix = f"🚨 Vigilance météo {departement} : "
+    chunk = []
+    for alert in vigilance:
+        candidate = f"{prefix}{', '.join((*chunk, alert))}"
+        if chunk and len(candidate.encode("utf-8")) > 180:
+            messages.append(f"{prefix}{', '.join(chunk)}")
+            chunk = [alert]
+        else:
+            chunk.append(alert)
+    if chunk:
+        messages.append(f"{prefix}{', '.join(chunk)}")
+    return messages
+
+
+def build_messages(
+    ville: str,
+    weather: dict,
+    vigilance: Optional[List[str]],
+    departement: str,
+) -> List[str]:
+    """Construit le bulletin météo et, si nécessaire, un message d'alerte dédié."""
+    weather_message = build_message(ville, weather)
+    if vigilance is None:
+        return [f"{weather_message}\n⚠️ Vigilance {departement} non vérifiée"]
+    if not vigilance:
+        return [f"{weather_message}\n✅ Vigilance {departement} : aucun orange/rouge"]
+    return [weather_message, *build_alert_messages(vigilance, departement)]
+
+
+def load_last_alerts() -> Optional[List[str]]:
+    """Retourne les alertes déjà signalées sur le mesh (None si inconnu)."""
+    try:
+        with open(ALERT_STATE_PATH, encoding="utf-8") as state_file:
+            return json.load(state_file).get("alerts", [])
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def save_last_alerts(alerts: List[str]) -> None:
+    """Mémorise les alertes signalées pour ne pas renvoyer le même message chaque heure."""
+    try:
+        with open(ALERT_STATE_PATH, "w", encoding="utf-8") as state_file:
+            json.dump({"alerts": alerts}, state_file, ensure_ascii=False)
+    except OSError as exc:
+        print(f"Impossible d'enregistrer l'état des alertes : {exc}", file=sys.stderr)
 
 
 def ping_node(host: str, timeout_s: int = 2) -> bool:
@@ -340,6 +475,11 @@ def main():
         help="Longitude (défaut: Rouen, ou METEO_LON dans .env).",
     )
     parser.add_argument(
+        "--departement",
+        default=os.environ.get("METEO_DEPARTEMENT", "76"),
+        help="Code du département pour la vigilance (défaut: 76, ou METEO_DEPARTEMENT dans .env).",
+    )
+    parser.add_argument(
         "--channel-name",
         default=os.environ.get("MESHTASTIC_CHANNEL_NAME", "meteo"),
         help="Nom du canal Meshtastic cible (défaut: meteo, ou MESHTASTIC_CHANNEL_NAME dans .env).",
@@ -370,6 +510,12 @@ def main():
         action="store_true",
         help="Affiche le message sans se connecter au node ni l'envoyer.",
     )
+    parser.add_argument(
+        "--alerts-only",
+        action="store_true",
+        help="Vérifie uniquement les vigilances orange/rouge et n'envoie un message que "
+        "s'il y a une nouvelle alerte (sans bulletin météo).",
+    )
     args = parser.parse_args()
 
     if not args.dry_run and not args.host:
@@ -378,12 +524,31 @@ def main():
             "(voir .env.example) ou passez --host <ip>."
         )
 
-    print("Récupération des prévisions météo pour", args.ville, "...")
-    weather = fetch_weather(args.lat, args.lon)
-    message = build_message(args.ville, weather)
+    if args.alerts_only:
+        print(f"Vérification des vigilances pour le département {args.departement}...")
+        vigilance = fetch_vigilance(args.departement)
+        if vigilance is None:
+            print("Vigilance non vérifiée : aucun message envoyé.", file=sys.stderr)
+            return
+        if not vigilance:
+            print("Aucune alerte orange/rouge.")
+            if load_last_alerts():
+                save_last_alerts([])
+            return
+        if vigilance == load_last_alerts():
+            print("Alertes déjà signalées : aucun nouveau message.")
+            return
+        messages = build_alert_messages(vigilance, args.departement)
+    else:
+        print("Récupération des prévisions météo pour", args.ville, "...")
+        weather = fetch_weather(args.lat, args.lon)
+        print(f"Récupération de la vigilance pour le département {args.departement}...")
+        vigilance = fetch_vigilance(args.departement)
+        messages = build_messages(args.ville, weather, vigilance, args.departement)
 
-    print("Message généré :")
-    print(f"  {message}  ({len(message.encode('utf-8'))} octets)")
+    print("Message(s) généré(s) :")
+    for message in messages:
+        print(f"  {message}  ({len(message.encode('utf-8'))} octets)")
 
     if args.dry_run:
         print("Mode --dry-run : le message n'a pas été envoyé.")
@@ -408,35 +573,41 @@ def main():
         channel_index = find_channel_index(iface, args.channel_name, args.channel_index)
         print(f"Envoi sur le canal '{args.channel_name}' (index {channel_index}) ...")
 
-        ack_event = threading.Event()
-        ack_status = {"success": None, "error": None}
+        for message in messages:
+            ack_event = threading.Event()
+            ack_status = {"success": None, "error": None}
 
-        # Nommée "onAckNak" : la lib meshtastic reconnaît ce nom pour livrer
-        # aussi les ACK simples (pas seulement les NAK/réponses applicatives).
-        def onAckNak(p):
-            routing = p.get("decoded", {}).get("routing", {})
-            ack_status["error"] = routing.get("errorReason", "UNKNOWN")
-            ack_status["success"] = ack_status["error"] == "NONE"
-            ack_event.set()
+            # Nommée "onAckNak" : la lib meshtastic reconnaît ce nom pour livrer
+            # aussi les ACK simples (pas seulement les NAK/réponses applicatives).
+            def onAckNak(p, event=ack_event, status=ack_status):
+                routing = p.get("decoded", {}).get("routing", {})
+                status["error"] = routing.get("errorReason", "UNKNOWN")
+                status["success"] = status["error"] == "NONE"
+                event.set()
 
-        iface.sendText(message, channelIndex=channel_index, wantAck=True, onResponse=onAckNak)
-        print(f"Message mis en file d'attente, attente d'un accusé de réception (max {ACK_TIMEOUT_SECONDS:.0f}s) ...")
-
-        if not ack_event.wait(timeout=ACK_TIMEOUT_SECONDS):
+            iface.sendText(message, channelIndex=channel_index, wantAck=True, onResponse=onAckNak)
             print(
-                f"Aucun accusé de réception reçu après {ACK_TIMEOUT_SECONDS:.0f}s : "
-                "le message n'a probablement pas été transmis sur le mesh.",
-                file=sys.stderr,
+                f"Message mis en file d'attente, attente d'un accusé de réception "
+                f"(max {ACK_TIMEOUT_SECONDS:.0f}s) ..."
             )
-        elif ack_status["success"]:
-            print("Message envoyé et acquitté par le réseau mesh.")
-        else:
-            print(
-                f"Message NON acquitté par le réseau mesh (erreur : {ack_status['error']}).",
-                file=sys.stderr,
-            )
+
+            if not ack_event.wait(timeout=ACK_TIMEOUT_SECONDS):
+                print(
+                    f"Aucun accusé de réception reçu après {ACK_TIMEOUT_SECONDS:.0f}s : "
+                    "le message n'a probablement pas été transmis sur le mesh.",
+                    file=sys.stderr,
+                )
+            elif ack_status["success"]:
+                print("Message envoyé et acquitté par le réseau mesh.")
+            else:
+                print(
+                    f"Message NON acquitté par le réseau mesh (erreur : {ack_status['error']}).",
+                    file=sys.stderr,
+                )
 
         time.sleep(SEND_SETTLE_SECONDS)
+        if vigilance is not None:
+            save_last_alerts(vigilance)
     finally:
         with contextlib.suppress(Exception):
             iface.close()

@@ -4,8 +4,11 @@
 """
 scheduler.py
 
-Boucle de planification qui exécute meteo_rouen_meshtastic.py tous les jours
-à une heure fixe, exprimée en heure de Paris (gère automatiquement le
+Boucle de planification qui exécute meteo_rouen_meshtastic.py :
+    - chaque jour à une heure fixe : bulletin météo (avec la vigilance) ;
+    - chaque heure pleine : vérification des alertes orange/rouge, avec envoi
+      sur le mesh uniquement s'il y a une nouvelle alerte.
+Les heures sont exprimées en heure de Paris (gère automatiquement le
 passage heure d'été / heure d'hiver grâce à zoneinfo).
 
 Variables d'environnement optionnelles :
@@ -43,6 +46,24 @@ def next_run_time(now: datetime) -> datetime:
     if target <= now:
         target += timedelta(days=1)
     return target
+
+
+def next_alert_check_time(now: datetime) -> datetime:
+    """Prochaine heure pleine (vérification horaire des alertes)."""
+    return now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+
+
+def run_alert_job():
+    """Vérifie les vigilances orange/rouge. Pas de nouvelle tentative : la
+    vérification suivante a lieu dans l'heure."""
+    now = datetime.now(PARIS_TZ)
+    result = subprocess.run([sys.executable, SCRIPT_PATH, "--alerts-only"])
+    if result.returncode != 0:
+        print(
+            f"[{now.isoformat()}] Vérification des alertes en échec (code {result.returncode}).",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def run_job():
@@ -83,8 +104,9 @@ def run_job():
 
 def main():
     print(
-        f"Scheduler météo Meshtastic démarré. Envoi quotidien à "
-        f"{RUN_HOUR:02d}:{RUN_MINUTE:02d} (heure de Paris).",
+        f"Scheduler météo Meshtastic démarré. Prévisions chaque jour à "
+        f"{RUN_HOUR:02d}:{RUN_MINUTE:02d} (heure de Paris), "
+        f"vérification des alertes chaque heure.",
         flush=True,
     )
 
@@ -94,18 +116,25 @@ def main():
 
     while True:
         now = datetime.now(PARIS_TZ)
-        target = next_run_time(now)
+        daily_target = next_run_time(now)
+        alert_target = next_alert_check_time(now)
+        if alert_target < daily_target:
+            target, job = alert_target, run_alert_job
+        else:
+            # À l'heure de la prévision, le bulletin inclut déjà les alertes.
+            target, job = daily_target, run_job
         sleep_seconds = (target - now).total_seconds()
         print(
             f"Prochaine exécution prévue : {target.isoformat()} "
-            f"(dans {sleep_seconds / 3600:.1f}h)",
+            f"(dans {sleep_seconds / 60:.0f} min)",
             flush=True,
         )
         time.sleep(max(sleep_seconds, 1))
-        run_job()
-        # Petite pause de sécurité pour éviter un double déclenchement
-        # si la boucle recalcule trop vite la même minute cible.
-        time.sleep(60)
+        job()
+        if job is run_job:
+            # Petite pause de sécurité pour éviter un double déclenchement
+            # si la boucle recalcule trop vite la même minute cible.
+            time.sleep(60)
 
 
 if __name__ == "__main__":
