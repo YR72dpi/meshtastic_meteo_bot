@@ -317,7 +317,7 @@ def build_message(ville: str, w: dict) -> str:
     soleil = niveau_ensoleillement(w["nuages"], w["ensoleillement_s"])
 
     return (
-        f"{icon} Météo {ville} — {date_str} ({condition})\n"
+        f"{icon} Prévision météo {ville} — {date_str} ({condition})\n"
         f"🌡️ {w['temp_min']:.0f}°C → {w['temp_max']:.0f}°C   💧 {w['humidite']:.0f}%\n"
         f"🌧️ {pluie}\n"
         f"☀️ {soleil}"
