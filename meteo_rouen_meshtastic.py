@@ -47,7 +47,7 @@ from typing import List, Optional
 import requests
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv  # type: ignore[import-not-found]
 except ImportError:
     print("Le paquet 'python-dotenv' est requis : pip install python-dotenv", file=sys.stderr)
     sys.exit(1)
