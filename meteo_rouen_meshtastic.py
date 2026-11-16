@@ -269,7 +269,7 @@ def fetch_vigilance(departement: str) -> Optional[List[str]]:
         print(f"Données de vigilance MeteoAlarm invalides : {exc}", file=sys.stderr)
         return None
 
-    return alerts
+    return sorted(set(alerts))
 
 
 def niveau_ensoleillement(nuages: float, duree_ensoleillement_s: float) -> str:
@@ -330,30 +330,31 @@ def build_alert_messages(vigilance: List[str], departement: str) -> List[str]:
     prefix = f"🚨 Vigilance météo {departement} : "
     chunk = []
     for alert in vigilance:
-        candidate = f"{prefix}{', '.join((*chunk, alert))}"
+        candidate = f"{prefix}{format_alerts([*chunk, alert])}"
         if chunk and len(candidate.encode("utf-8")) > 180:
-            messages.append(f"{prefix}{', '.join(chunk)}")
+            messages.append(f"{prefix}{format_alerts(chunk)}")
             chunk = [alert]
         else:
             chunk.append(alert)
     if chunk:
-        messages.append(f"{prefix}{', '.join(chunk)}")
+        messages.append(f"{prefix}{format_alerts(chunk)}")
     return messages
 
 
-def build_messages(
-    ville: str,
-    weather: dict,
-    vigilance: Optional[List[str]],
-    departement: str,
-) -> List[str]:
-    """Construit le bulletin météo et, si nécessaire, un message d'alerte dédié."""
-    weather_message = build_message(ville, weather)
-    if vigilance is None:
-        return [f"{weather_message}\n⚠️ Vigilance {departement} non vérifiée"]
-    if not vigilance:
-        return [f"{weather_message}\n✅ Vigilance {departement} : aucun orange/rouge"]
-    return [weather_message, *build_alert_messages(vigilance, departement)]
+def format_alerts(alerts: List[str]) -> str:
+    """Regroupe les phénomènes par couleur sans répéter une alerte."""
+    groups = {"ORANGE": [], "ROUGE": []}
+    for alert in alerts:
+        color, _, phenomenon = alert.partition(" ")
+        if color in groups and phenomenon and phenomenon not in groups[color]:
+            groups[color].append(phenomenon)
+
+    labels = {"ORANGE": "Orange", "ROUGE": "Rouge"}
+    return "; ".join(
+        f"{labels[color]}: {', '.join(phenomena)}"
+        for color, phenomena in groups.items()
+        if phenomena
+    )
 
 
 def load_last_alerts() -> Optional[List[str]]:
@@ -542,9 +543,7 @@ def main():
     else:
         print("Récupération des prévisions météo pour", args.ville, "...")
         weather = fetch_weather(args.lat, args.lon)
-        print(f"Récupération de la vigilance pour le département {args.departement}...")
-        vigilance = fetch_vigilance(args.departement)
-        messages = build_messages(args.ville, weather, vigilance, args.departement)
+        messages = [build_message(args.ville, weather)]
 
     print("Message(s) généré(s) :")
     for message in messages:
@@ -606,7 +605,7 @@ def main():
                 )
 
         time.sleep(SEND_SETTLE_SECONDS)
-        if vigilance is not None:
+        if args.alerts_only and vigilance is not None:
             save_last_alerts(vigilance)
     finally:
         with contextlib.suppress(Exception):

@@ -42,10 +42,11 @@ The bot publishes a small multi-line "card" in a dashboard-like format, designed
 ```
 
 When Météo-France reports an orange or red alert, the bot also sends a
-separate message to the channel, for example:
+separate message to the channel, grouped by color with duplicate phenomena
+removed, for example:
 
 ```text
-🚨 Vigilance météo 76 : ROUGE orages, ORANGE vent
+🚨 Vigilance météo 76 : Orange: vent, pluie-inondation; Rouge: orages
 ```
 
 ## 🚀 Quick Start
@@ -69,11 +70,11 @@ etc.).
 The vigilance check uses the public MeteoAlarm feed (published by Météo-France,
 no API key required). The bot sends orange/red alerts for the department set in
 `METEO_DEPARTEMENT` (default `76`, Seine-Maritime; only this department is
-mapped for now). The daily forecast includes the vigilance status, and the
-alerts are checked every hour: a message is sent only when a new orange/red
-alert appears (the state is kept in `alerts_state.json`, or `ALERT_STATE_FILE`).
-If the feed is unavailable, the daily forecast states that vigilance could not
-be checked, and the hourly check simply waits for the next run.
+mapped for now). Vigilance is not included in the daily forecast. Alerts are
+checked separately every hour, and a message is sent only when a new
+orange/red alert appears (the state is kept in `alerts_state.json`, or
+`ALERT_STATE_FILE`). If the feed is unavailable, the hourly check simply waits
+for the next run.
 
 ### 2. Run with Docker
 

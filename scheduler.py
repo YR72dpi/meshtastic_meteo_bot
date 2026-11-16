@@ -5,7 +5,7 @@
 scheduler.py
 
 Boucle de planification qui exécute meteo_rouen_meshtastic.py :
-    - chaque jour à une heure fixe : bulletin météo (avec la vigilance) ;
+    - chaque jour à une heure fixe : bulletin météo ;
     - chaque heure pleine : vérification des alertes orange/rouge, avec envoi
       sur le mesh uniquement s'il y a une nouvelle alerte.
 Les heures sont exprimées en heure de Paris (gère automatiquement le
@@ -121,7 +121,7 @@ def main():
         if alert_target < daily_target:
             target, job = alert_target, run_alert_job
         else:
-            # À l'heure de la prévision, le bulletin inclut déjà les alertes.
+            # La vérification horaire reste distincte du bulletin météo.
             target, job = daily_target, run_job
         sleep_seconds = (target - now).total_seconds()
         print(
@@ -130,6 +130,8 @@ def main():
             flush=True,
         )
         time.sleep(max(sleep_seconds, 1))
+        if job is run_job:
+            run_alert_job()
         job()
         if job is run_job:
             # Petite pause de sécurité pour éviter un double déclenchement
