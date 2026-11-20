@@ -349,13 +349,12 @@ def format_alerts(alerts: List[str]) -> str:
         if color in groups and phenomenon and phenomenon not in groups[color]:
             groups[color].append(phenomenon)
 
-    labels = {"ORANGE": "Orange", "ROUGE": "Rouge"}
-    return "; ".join(
-        f"{labels[color]}: {', '.join(phenomena)}"
+    emojis = {"ORANGE": "🟠", "ROUGE": "🔴"}
+    return ". ".join(
+        f"{emojis[color]} {color} {' '.join(phenomena)}"
         for color, phenomena in groups.items()
         if phenomena
     )
-
 
 def load_last_alerts() -> Optional[List[str]]:
     """Retourne les alertes déjà signalées sur le mesh (None si inconnu)."""
